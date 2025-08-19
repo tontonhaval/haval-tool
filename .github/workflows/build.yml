@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - release
+      - main
 
 jobs:
   publish-tauri:
@@ -50,8 +50,10 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: install frontend dependencies
-        # If you don't have `beforeBuildCommand` configured you may want to build your frontend here too.
         run: bun install
+  
+      - name: build frontend
+        run: bun run build
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -59,7 +61,7 @@ jobs:
         with:
           tagName: app-v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
           releaseName: 'Haval Tool v__VERSION__'
-          releaseBody: 'Baixe a versão compatível com seu sistema operacional e instale.'
-          releaseDraft: false
+          releaseBody: 'Instale a versão compatível com seu sistema operacional.'
+          releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
