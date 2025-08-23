@@ -76,7 +76,7 @@ check_versions() {
 download() {
     [ -f "$2" ] && [ -s "$2" ] && { log "INFO" "Arquivo $2 ja existe"; return; }
     log "INFO" "Baixando $3..."
-    curl -L --progress-bar -o "$2" "$1" || die "Falha no download de $2"
+    curl -L --progress-bar -o "$2" -C - --retry 10 --retry-delay 3 "$1" || die "Falha no download de $2"
     [ -f "$2" ] && [ -s "$2" ] || die "Arquivo $2 vazio/inexistente"
 }
 
@@ -99,9 +99,9 @@ main() {
     
     # Downloads
     log "INFO" "Fase 1: Downloads"
-    download "https://logger.assets-redesurftank.com.br/haval/fridaserver.rar" "fridaserver" "fridaserver"
-    download "https://logger.assets-redesurftank.com.br/haval/fridainject.rar" "fridainject" "fridainject"
-    download "https://logger.assets-redesurftank.com.br/haval/system_server.js" "system_server.js" "system_server.js"
+    download "https://havaltool.s3.us-east-1.amazonaws.com/fridaserver.rar" "fridaserver" "fridaserver"
+    download "https://havaltool.s3.us-east-1.amazonaws.com/fridainject.rar" "fridainject" "fridainject"
+    download "https://havaltool.s3.us-east-1.amazonaws.com/system_server.js" "system_server.js" "system_server.js"
     download "$(get_latest_release "https://github.com/RikkaApps/Shizuku")" "shizuku.apk" "Shizuku APK"
     download "$(get_latest_release "https://github.com/bobaoapae/haval-app-tool-multimidia")" "haval.apk" "Haval APK"
     
@@ -122,7 +122,7 @@ main() {
     [ -f "system_server.js" ] || die "system_server.js nao encontrado"
     SYSTEM_PID=$(pidof system_server) || die "system_server nao encontrado"
     ./fridainject -p "$SYSTEM_PID" -s system_server.js &
-    sleep 1
+    sleep 5
     log "INFO" "Injecao iniciada"
     
     # Instalacoes

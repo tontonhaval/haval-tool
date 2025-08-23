@@ -1,20 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCwIcon, ArrowLeftIcon, TerminalIcon, PlayIcon } from 'lucide-react'
+import { RefreshCwIcon, ArrowLeftIcon, PlayIcon } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { error } from '@tauri-apps/plugin-log';
+import { Terminal as TerminalComponent, DebugModal, useDebugModal } from '../components'
 
-type TerminalProps =  {
-  type: 'install' | 'update'
-}
-
-export const Terminal = ({ type = 'install' }: TerminalProps) => {
+export const Terminal = () => {
   const [output, setOutput] = useState<string[]>([])
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isExecuting, setIsExecuting] = useState(false)
   const [gatewayIp, setGatewayIp] = useState<string>('')
   const navigate = useNavigate()
+  const { isOpen, openModal, closeModal } = useDebugModal()
+
 
   useEffect(() => {
     setOutput([])
@@ -38,6 +37,14 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
     }
 
     setup();
+
+    return () => {
+      invoke('disconnect_from_telnet').catch(() => {})
+      setIsConnected(false)
+      setIsConnecting(false)
+      setIsExecuting(false)
+      setGatewayIp('')
+    }
   }, []);
 
   const executeInstallScript = async () => {
@@ -68,46 +75,17 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
     setIsConnecting(false)
     setIsExecuting(false)
     setGatewayIp('')
-  
-    if (type === 'install') {
-      navigate('/install/warning')
-    } else {
-      navigate('/update/packages')
-    }
+    navigate('/install/warning')
   }
   const handleBack = () => {
     navigate('/')
   }
+  
   return (
     <div className="flex flex-col">
       <div className="flex-1 flex flex-col items-center justify-center p-6">
         <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl shadow-2xl w-full max-w-2xl border border-white/20">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <TerminalIcon className="text-green-400" size={24} />
-              <h1 className="text-xl font-bold text-white">
-                {type === 'install'
-                  ? 'Instalação em Progresso'
-                  : 'Atualização em Progresso'}
-              </h1>
-            </div>
-            <div className="flex gap-1">
-              <div className="h-3 w-3 rounded-full bg-red-500"></div>
-              <div className="h-3 w-3 rounded-full bg-yellow-500"></div>
-              <div className="h-3 w-3 rounded-full bg-green-500"></div>
-            </div>
-          </div>
-          <div className="bg-gray-950 text-green-400 font-mono p-5 rounded-xl h-52 overflow-y-auto overflow-x-auto mb-5 border border-gray-800 shadow-inner">
-            {output.map((line: string, index: number) => (
-              <div key={index} className="mb-1 whitespace-nowrap">
-                {line}
-              </div>
-            ))}
-            {(isConnecting || isExecuting) && (
-              <div className="inline-block h-4 w-2 bg-green-500 animate-pulse ml-1"></div>
-            )}
-          </div>
-          
+          <TerminalComponent title="Instalação em Progresso" output={output} isConnecting={isConnecting} isExecuting={isExecuting} />          
           {/* Status de conexão */}
           <div className="mb-4">
             <div className="flex justify-between text-sm text-gray-300 mb-2">
@@ -144,6 +122,7 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
               <ArrowLeftIcon size={18} />
               <span>Voltar</span>
             </button>
+
             <button
               onClick={handleRestart}
               disabled={isConnecting || isExecuting}
@@ -155,6 +134,19 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
           </div>
         </div>
       </div>
+      
+      <button
+        onClick={openModal}
+        className="fixed bottom-4 right-4 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-all duration-300 shadow-lg"
+      >
+        Abrir Debug
+      </button>
+
+      {/* Modal de Debug */}
+      <DebugModal 
+        isOpen={isOpen}
+        onClose={closeModal}
+      />
     </div>
   )
 }

@@ -1,10 +1,13 @@
 use std::time::Duration;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
+#[derive(Clone)]
 pub struct ConnectionState {
-    stream: Mutex<Option<TcpStream>>,
+    stream: Arc<Mutex<Option<TcpStream>>>,
+    output_buffer: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -15,12 +18,12 @@ enum ApiError {
     GatewayNotFound,
     #[error("A conexão Telnet não está estabelecida")]
     NotConnected,
-    #[error("Já está conectado")]
-    AlreadyConnected,
     #[error("Rollback detectado durante a verificação de instalação")]
     RollbackDetected,
     #[error("A resposta esperada não foi recebida a tempo (timeout)")]
     Timeout,
+    #[error("Falha ao baixar o script de instalação")]
+    DownloadFailed,
     #[error("Erro de I/O: {0}")]
     Io(#[from] std::io::Error), // Converte erros de IO automaticamente
 }
@@ -46,7 +49,7 @@ async fn get_gateway() -> Result<String, ApiError> {
 #[tauri::command]
 async fn is_haval_hotspot() -> Result<(), ApiError> {
     let gateway = get_gateway().await?;
-    if !gateway.starts_with("192.168.33.") {
+    if !gateway.starts_with("192.168.3.") {
         return Err(ApiError::NotHavalHotspot(gateway));
     }
     Ok(())
@@ -65,10 +68,16 @@ async fn connect_to_telnet(state: tauri::State<'_, ConnectionState>) -> Result<(
     // Bloqueia o acesso ao estado para modificá-lo
     let mut stream_lock = state.stream.lock().await;
 
+    // Sempre encerra conexões existentes antes de criar uma nova
     if stream_lock.is_some() {
-        println!("Já existe uma conexão ativa.");
-        return Err(ApiError::AlreadyConnected);
+        println!("Encerrando conexão existente...");
+        *stream_lock = None;
     }
+
+    // Limpa o buffer de output quando uma nova conexão é estabelecida
+    let mut output_buffer = state.output_buffer.lock().await;
+    output_buffer.clear();
+    drop(output_buffer); // Libera o lock do output_buffer
 
     let gateway = get_gateway().await?;
     let addr = format!("{}:23", gateway); // Porta 23 é a padrão do Telnet
@@ -126,7 +135,16 @@ async fn send_command(
 // Equivalente a: api.injectScript
 #[tauri::command]
 async fn inject_script(state: tauri::State<'_, ConnectionState>) -> Result<(), ApiError> {
-    let install_script = include_str!("install.sh");
+    // Download do script da URL
+    let client = reqwest::Client::new();
+    let install_script = client
+        .get("https://raw.githubusercontent.com/tontonhaval/haval-tool/refs/heads/main/install.sh")
+        .send()
+        .await
+        .map_err(|_| ApiError::DownloadFailed)?
+        .text()
+        .await
+        .map_err(|_| ApiError::DownloadFailed)?;
 
     let install_script_escaped = install_script.split('\n').collect::<Vec<_>>().join("\\n");
 
@@ -212,12 +230,92 @@ async fn is_installed(state: tauri::State<'_, ConnectionState>) -> Result<(), Ap
     }
 }
 
+// Função para monitorar output do Telnet e armazenar no buffer
+#[tauri::command]
+async fn start_telnet_monitor(
+    state: tauri::State<'_, ConnectionState>,
+) -> Result<(), ApiError> {
+    let state_clone = state.inner().clone();
+    
+    // Spawn uma task assíncrona para monitorar o output
+    tokio::spawn(async move {
+        let mut stream_lock = state_clone.stream.lock().await;
+        
+        if let Some(stream) = stream_lock.as_mut() {
+            let mut reader = BufReader::new(stream);
+            let mut line_buffer = Vec::new();
+            
+            loop {
+                line_buffer.clear();
+                
+                match reader.read_until(b'\n', &mut line_buffer).await {
+                    Ok(bytes_read) if bytes_read > 0 => {
+                        // Tenta decodificar como UTF-8
+                        if let Ok(response) = String::from_utf8(line_buffer.clone()) {
+                            let trimmed_response = response.trim();
+                            
+                            if !trimmed_response.is_empty() {
+                                // Armazena no buffer de output
+                                let mut output_buffer = state_clone.output_buffer.lock().await;
+                                output_buffer.push(trimmed_response.to_string());
+                                println!("Telnet output: {}", trimmed_response);
+                            }
+                        }
+                    }
+                    Ok(0) => {
+                        // Conexão fechada
+                        println!("Conexão Telnet fechada");
+                        break;
+                    }
+                    Ok(_) => {
+                        // Bytes lidos mas não processados
+                        continue;
+                    }
+                    Err(e) => {
+                        // Erro na leitura
+                        println!("Erro na leitura: {}", e);
+                        break;
+                    }
+                }
+            }
+        } else {
+            println!("Nenhuma conexão Telnet ativa");
+        }
+    });
+    
+    Ok(())
+}
+
+// Função para obter o output do Telnet
+#[tauri::command]
+async fn get_telnet_output(state: tauri::State<'_, ConnectionState>) -> Result<Vec<String>, ApiError> {
+    let output_buffer = state.output_buffer.lock().await;
+    Ok(output_buffer.clone())
+}
+
+// Função para limpar o buffer de output
+#[tauri::command]
+async fn clear_telnet_output(state: tauri::State<'_, ConnectionState>) -> Result<(), ApiError> {
+    let mut output_buffer = state.output_buffer.lock().await;
+    output_buffer.clear();
+    Ok(())
+}
+
+// Função para parar o monitoramento
+#[tauri::command]
+async fn stop_telnet_monitor() -> Result<(), ApiError> {
+    // Esta função pode ser usada para parar o monitoramento se necessário
+    // Por enquanto, o monitoramento para automaticamente quando a conexão é fechada
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         // 1. Inicializa o nosso estado e o disponibiliza para todos os comandos
         .manage(ConnectionState {
-            stream: Mutex::new(None),
+            stream: Arc::new(Mutex::new(None)),
+            output_buffer: Arc::new(Mutex::new(Vec::new())),
         })
         // 2. Registra todos os nossos comandos para que o frontend possa chamá-los
         .invoke_handler(tauri::generate_handler![
@@ -228,7 +326,11 @@ pub fn run() {
             send_command,
             is_connected,
             inject_script,
-            is_installed
+            is_installed,
+            start_telnet_monitor,
+            get_telnet_output,
+            clear_telnet_output,
+            stop_telnet_monitor
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
