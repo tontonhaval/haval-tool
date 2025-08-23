@@ -13,7 +13,7 @@ export function App() {
           <Route path="/install/warning" element={<Warning />} />
           <Route
             path="/install/terminal"
-            element={<Terminal type="install" />}
+            element={<Terminal />}
           />
           <Route path="/install/success" element={<Success />} />
         </Routes>
