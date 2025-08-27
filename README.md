@@ -1,7 +1,7 @@
-# Haval Tool
+# Haval Install
 
 <div align="center">
-  <img src="public/icon.png" alt="Haval Tool Icon" width="128" height="128">
+  <img src="public/icon.png" alt="Haval Install Icon" width="128" height="128">
 </div>
 
 Uma aplicação desktop moderna construída com Tauri, React e TypeScript para gerenciamento e ferramentas relacionadas ao Haval.

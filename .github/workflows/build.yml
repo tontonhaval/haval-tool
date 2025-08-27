@@ -60,7 +60,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: app-v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
-          releaseName: 'Haval Tool v__VERSION__'
+          releaseName: 'Haval Install v__VERSION__'
           releaseBody: 'Instale a versão compatível com seu sistema operacional.'
           releaseDraft: true
           prerelease: false

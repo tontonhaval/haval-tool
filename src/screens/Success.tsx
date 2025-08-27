@@ -20,7 +20,7 @@ export const Success = () => {
                 <div>
                   <h3 className="text-green-400 font-semibold mb-2">Próximos Passos:</h3>
                   <p className="text-green-300 text-sm leading-relaxed">
-                    Agora é só aguardar o <strong>App Haval Tool</strong> abrir automaticamente. 
+                    Agora é só aguardar o <strong>App Haval Install</strong> abrir automaticamente. 
                     Em seguida, basta dar as permissões que ele solicitar para garantir o funcionamento completo.
                   </p>
                 </div>
