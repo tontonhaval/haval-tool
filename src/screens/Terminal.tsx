@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCwIcon, ArrowLeftIcon, TerminalIcon, PlayIcon } from 'lucide-react'
+import { RefreshCwIcon, ArrowLeftIcon, PlayIcon, BugIcon } from 'lucide-react'
+import { Terminal as TerminalComponent, DebugModal } from '../components'
 import { invoke } from '@tauri-apps/api/core'
 import { error } from '@tauri-apps/plugin-log';
 
-type TerminalProps =  {
-  type: 'install' | 'update'
-}
-
-export const Terminal = ({ type = 'install' }: TerminalProps) => {
+export const Terminal = () => {
   const [output, setOutput] = useState<string[]>([])
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isExecuting, setIsExecuting] = useState(false)
   const [gatewayIp, setGatewayIp] = useState<string>('')
+  const [isDebugEnabled, setIsDebugEnabled] = useState(false)
+  const [isDebugModalOpen, setIsDebugModalOpen] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -28,12 +27,19 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
       setOutput((prev: string[]) => [...prev, `Gateway: ${gateway}`])
 
       try {
-        await invoke('connect_to_telnet')
-        setIsConnected(true)
-        setOutput((prev: string[]) => [...prev, 'Conexão estabelecida com sucesso!'])
+        // Verifica se já está conectado primeiro
+        const isAlreadyConnected = await invoke<boolean>('is_connected')
+        if (isAlreadyConnected) {
+          setIsConnected(true)
+          setOutput((prev: string[]) => [...prev, 'Conexão já estabelecida!'])
+        } else {
+          await invoke('connect_to_telnet')
+          setIsConnected(true)
+          setOutput((prev: string[]) => [...prev, 'Conexão estabelecida com sucesso!'])
+        }
       } catch (e) {
         setIsConnected(false)
-        setOutput((prev: string[]) => [...prev, 'Erro ao conectar ao telnet!'])
+        setOutput((prev: string[]) => [...prev, `Erro ao conectar ao telnet: ${e}`])
       }
     }
 
@@ -42,6 +48,14 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
 
   const executeInstallScript = async () => {
     setIsExecuting(true)
+    setIsDebugEnabled(false) // Reset debug state
+    
+    // Enable debug button after 5 seconds
+    setTimeout(() => {
+      setIsDebugEnabled(true)
+      setOutput((prev: string[]) => [...prev, '🔧 Botão de debug habilitado'])
+    }, 2000)
+    
     try {
       await invoke('inject_script')
       setOutput((prev: string[]) => [...prev, 'Script injectado com sucessso!'])
@@ -62,51 +76,50 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
     }
   }
   
-  const handleRestart = () => {
+  const handleRestart = async () => {
     setOutput([])
     setIsConnected(false)
     setIsConnecting(false)
     setIsExecuting(false)
     setGatewayIp('')
-  
-    if (type === 'install') {
-      navigate('/install/warning')
-    } else {
-      navigate('/update/packages')
+    setIsDebugEnabled(false)
+
+    // Attempt to reconnect to telnet
+    try {
+      setIsConnecting(true)
+      setOutput((prev: string[]) => [...prev, 'Desconectando...'])
+      
+      // Disconnect first
+      await invoke('disconnect_from_telnet')
+      
+      setOutput((prev: string[]) => [...prev, 'Tentando reconectar...'])
+      await invoke('connect_to_telnet')
+      
+      // Verify connection is actually working
+      const isConnected = await invoke<boolean>('is_connected')
+      if (isConnected) {
+        setIsConnected(true)
+        setOutput((prev: string[]) => [...prev, 'Reconexão estabelecida com sucesso!'])
+      } else {
+        setIsConnected(false)
+        setOutput((prev: string[]) => [...prev, 'Falha na verificação da conexão!'])
+      }
+    } catch (e) {
+      setIsConnected(false)
+      setOutput((prev: string[]) => [...prev, `Erro ao reconectar ao telnet: ${e}`])
+    } finally {
+      setIsConnecting(false)
     }
   }
   const handleBack = () => {
+    handleRestart();
     navigate('/')
   }
   return (
     <div className="flex flex-col">
       <div className="flex-1 flex flex-col items-center justify-center p-6">
         <div className="bg-white/10 backdrop-blur-md p-6 rounded-2xl shadow-2xl w-full max-w-2xl border border-white/20">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <TerminalIcon className="text-green-400" size={24} />
-              <h1 className="text-xl font-bold text-white">
-                {type === 'install'
-                  ? 'Instalação em Progresso'
-                  : 'Atualização em Progresso'}
-              </h1>
-            </div>
-            <div className="flex gap-1">
-              <div className="h-3 w-3 rounded-full bg-red-500"></div>
-              <div className="h-3 w-3 rounded-full bg-yellow-500"></div>
-              <div className="h-3 w-3 rounded-full bg-green-500"></div>
-            </div>
-          </div>
-          <div className="bg-gray-950 text-green-400 font-mono p-5 rounded-xl h-52 overflow-y-auto overflow-x-auto mb-5 border border-gray-800 shadow-inner">
-            {output.map((line: string, index: number) => (
-              <div key={index} className="mb-1 whitespace-nowrap">
-                {line}
-              </div>
-            ))}
-            {(isConnecting || isExecuting) && (
-              <div className="inline-block h-4 w-2 bg-green-500 animate-pulse ml-1"></div>
-            )}
-          </div>
+          <TerminalComponent title={'Instalação em Progresso'} output={output} isConnecting={isConnecting} isExecuting={isExecuting} />
           
           {/* Status de conexão */}
           <div className="mb-4">
@@ -153,8 +166,34 @@ export const Terminal = ({ type = 'install' }: TerminalProps) => {
               <span>Recomeçar</span>
             </button>
           </div>
+          
+          {/* Botão de Debug */}
+          {isExecuting && (
+            <button
+              onClick={() => setIsDebugModalOpen(true)}
+              disabled={!isDebugEnabled}
+              className={`mt-4 w-full flex items-center justify-center gap-2 py-3 px-5 rounded-xl transition-all duration-300 ${
+                isDebugEnabled 
+                  ? 'bg-purple-600 text-white hover:bg-purple-700 shadow-lg hover:shadow-purple-600/30' 
+                  : 'bg-gray-800 text-gray-500 cursor-not-allowed'
+              }`}
+            >
+              <BugIcon size={18} />
+              <span>
+                {isDebugEnabled ? '🔧 Abrir Debug' : '⏳ Debug disponível em 2s'}
+              </span>
+            </button>
+          )}
+          
         </div>
       </div>
+      
+      {/* Modal de Debug */}
+      <DebugModal 
+        isOpen={isDebugModalOpen}
+        onClose={() => setIsDebugModalOpen(false)}
+        title="Debug - Instalação"
+      />
     </div>
   )
 }

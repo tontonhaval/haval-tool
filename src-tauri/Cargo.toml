@@ -1,6 +1,6 @@
 [package]
 name = "haval-tool-gui"
-version = "0.1.0"
+version = "0.1.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -26,3 +26,4 @@ tokio = { version = "1", features = ["full"] } # Para I/O assíncrono (rede, tim
 default-net = "0.22" # Para encontrar o gateway padrão da rede
 thiserror = "1.0" # Para criar tipos de erro mais limpos
 tauri-plugin-log = "2"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }

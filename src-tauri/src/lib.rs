@@ -1,10 +1,13 @@
 use std::time::Duration;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tauri::Emitter;
 
+#[derive(Clone)]
 pub struct ConnectionState {
-    stream: Mutex<Option<TcpStream>>,
+    stream: Arc<Mutex<Option<TcpStream>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +24,8 @@ enum ApiError {
     RollbackDetected,
     #[error("A resposta esperada não foi recebida a tempo (timeout)")]
     Timeout,
+    #[error("Falha ao baixar o script de instalação")]
+    DownloadFailed,
     #[error("Erro de I/O: {0}")]
     Io(#[from] std::io::Error), // Converte erros de IO automaticamente
 }
@@ -98,7 +103,6 @@ async fn disconnect_from_telnet(state: tauri::State<'_, ConnectionState>) -> Res
     Ok(())
 }
 
-// Equivalente a: api.sendCommand
 #[tauri::command]
 async fn send_command(
     command: String,
@@ -123,10 +127,35 @@ async fn send_command(
     Ok(())
 }
 
+// Função helper para enviar comando e emitir evento
+async fn send_command_with_event(
+    command: String,
+    state: tauri::State<'_, ConnectionState>,
+    app: &tauri::AppHandle,
+) -> Result<(), ApiError> {
+    // Emite o comando sendo enviado
+    let _ = app.emit("telnet-output", format!("$ {}", command));
+    
+    // Envia o comando normalmente
+    send_command(command, state).await
+}
+
 // Equivalente a: api.injectScript
 #[tauri::command]
-async fn inject_script(state: tauri::State<'_, ConnectionState>) -> Result<(), ApiError> {
-    let install_script = include_str!("install.sh");
+async fn inject_script(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ConnectionState>
+) -> Result<(), ApiError> {
+    // Download do script da URL sempre atualizada
+    let client = reqwest::Client::new();
+    let install_script = client
+        .get("https://raw.githubusercontent.com/tontonhaval/haval-tool/refs/heads/main/install.sh")
+        .send()
+        .await
+        .map_err(|_| ApiError::DownloadFailed)?
+        .text()
+        .await
+        .map_err(|_| ApiError::DownloadFailed)?;
 
     let install_script_escaped = install_script.split('\n').collect::<Vec<_>>().join("\\n");
 
@@ -140,19 +169,25 @@ async fn inject_script(state: tauri::State<'_, ConnectionState>) -> Result<(), A
         connect_to_telnet(state.clone()).await?;
     }
 
-    send_command(echo_command, state.clone()).await?;
+    // Emite eventos sobre o progresso
+    let _ = app.emit("telnet-output", "📦 Enviando script para o dispositivo...");
+    send_command_with_event(echo_command, state.clone(), &app).await?;
     tokio::time::sleep(Duration::from_secs(2)).await; // Equivalente a delay(2000)
 
-    send_command(
+    let _ = app.emit("telnet-output", "🔧 Definindo permissões de execução...");
+    send_command_with_event(
         "chmod +x /data/local/tmp/install.sh".to_string(),
         state.clone(),
+        &app,
     )
     .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    send_command(
+    let _ = app.emit("telnet-output", "🚀 Executando script de instalação...");
+    send_command_with_event(
         "cd /data/local/tmp && ./install.sh".to_string(),
         state.clone(),
+        &app,
     )
     .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -160,9 +195,27 @@ async fn inject_script(state: tauri::State<'_, ConnectionState>) -> Result<(), A
     Ok(())
 }
 
+// Função para monitorar output do telnet e emitir eventos
+#[tauri::command]
+async fn start_telnet_monitor(
+    app: tauri::AppHandle,
+    _state: tauri::State<'_, ConnectionState>,
+) -> Result<(), ApiError> {
+    // Por enquanto, apenas informa que o monitoramento começou
+    let _ = app.emit("telnet-output", "🚀 Monitor de telnet iniciado");
+    let _ = app.emit("telnet-output", "📡 Conectado ao sistema telnet");
+    let _ = app.emit("telnet-output", "⚡ Aguardando comandos e respostas...");
+    
+    println!("Monitor de telnet iniciado (modo simplificado)");
+    Ok(())
+}
+
 // Equivalente a: api.isInstalled
 #[tauri::command]
-async fn is_installed(state: tauri::State<'_, ConnectionState>) -> Result<(), ApiError> {
+async fn is_installed(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ConnectionState>
+) -> Result<(), ApiError> {
     // Esta função vai ouvir por uma resposta específica, com um timeout.
     let operation = async {
         let mut stream_lock = state.stream.lock().await;
@@ -193,6 +246,8 @@ async fn is_installed(state: tauri::State<'_, ConnectionState>) -> Result<(), Ap
                 };
                 
                 println!("Resposta recebida: '{}'", response);
+                // Emite o output para o DebugModal
+                let _ = app.emit("telnet-output", response.clone());
 
                 if response == "fb5f2f27be2de104ac2b192f3e874dda" {
                     return Ok(());
@@ -217,7 +272,7 @@ pub fn run() {
         .plugin(tauri_plugin_log::Builder::new().build())
         // 1. Inicializa o nosso estado e o disponibiliza para todos os comandos
         .manage(ConnectionState {
-            stream: Mutex::new(None),
+            stream: Arc::new(Mutex::new(None)),
         })
         // 2. Registra todos os nossos comandos para que o frontend possa chamá-los
         .invoke_handler(tauri::generate_handler![
@@ -228,7 +283,8 @@ pub fn run() {
             send_command,
             is_connected,
             inject_script,
-            is_installed
+            is_installed,
+            start_telnet_monitor
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
