@@ -210,6 +210,41 @@ async fn start_telnet_monitor(
     Ok(())
 }
 
+const INSTALL_SUCCESS_MARKER: &str = "fb5f2f27be2de104ac2b192f3e874dda";
+const INSTALL_ROLLBACK_MARKER: &str = "fff66e9b3d962fa319c8068b5c1997cd";
+
+#[derive(Debug, PartialEq, Eq)]
+enum InstallOutputSignal {
+    Success,
+    Rollback,
+}
+
+/// Classifica uma linha normalizada (trim + lowercase) do Telnet como conclusão ou rollback.
+/// Ignora ecos do comando `echo -e` e prompts do shell para evitar falsos positivos.
+fn classify_install_output(response: &str) -> Option<InstallOutputSignal> {
+    if response.is_empty()
+        || response.contains("echo -e")
+        || response.starts_with(":/ #")
+        || response.starts_with("$ ")
+    {
+        return None;
+    }
+
+    let cleaned = response.trim_start_matches(|c: char| !c.is_ascii_alphanumeric() && c != '[');
+
+    if cleaned == INSTALL_SUCCESS_MARKER || cleaned == "instalacao concluida!" {
+        return Some(InstallOutputSignal::Success);
+    }
+
+    if cleaned == INSTALL_ROLLBACK_MARKER
+        || (cleaned.starts_with("[info]") && cleaned.ends_with("rollback concluido"))
+    {
+        return Some(InstallOutputSignal::Rollback);
+    }
+
+    None
+}
+
 // Equivalente a: api.isInstalled
 #[tauri::command]
 async fn is_installed(
@@ -249,10 +284,10 @@ async fn is_installed(
                 // Emite o output para o DebugModal
                 let _ = app.emit("telnet-output", response.clone());
 
-                if response == "fb5f2f27be2de104ac2b192f3e874dda" {
-                    return Ok(());
-                } else if response == "fff66e9b3d962fa319c8068b5c1997cd" {
-                    return Err(ApiError::RollbackDetected);
+                match classify_install_output(&response) {
+                    Some(InstallOutputSignal::Success) => return Ok(()),
+                    Some(InstallOutputSignal::Rollback) => return Err(ApiError::RollbackDetected),
+                    None => {}
                 }
                 // Se não for nenhuma das respostas esperadas, o loop continua
             }
@@ -288,4 +323,59 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_legacy_markers() {
+        assert_eq!(
+            classify_install_output("fb5f2f27be2de104ac2b192f3e874dda"),
+            Some(InstallOutputSignal::Success)
+        );
+        assert_eq!(
+            classify_install_output("fff66e9b3d962fa319c8068b5c1997cd"),
+            Some(InstallOutputSignal::Rollback)
+        );
+    }
+
+    #[test]
+    fn detects_human_readable_outputs() {
+        assert_eq!(
+            classify_install_output("🎉 instalacao concluida!"),
+            Some(InstallOutputSignal::Success)
+        );
+        assert_eq!(
+            classify_install_output("instalacao concluida!"),
+            Some(InstallOutputSignal::Success)
+        );
+        assert_eq!(
+            classify_install_output("\u{fffd} instalacao concluida!"),
+            Some(InstallOutputSignal::Success)
+        );
+        assert_eq!(
+            classify_install_output("[info] 15:14:57 rollback concluido"),
+            Some(InstallOutputSignal::Rollback)
+        );
+    }
+
+    #[test]
+    fn ignores_telnet_echo_and_intermediate_lines() {
+        let echoed_script = r#":/ # echo -e '#!/bin/sh\nlog "info" "rollback concluido"\necho "🎉 instalacao concluida!"\necho "fb5f2f27be2de104ac2b192f3e874dda"\n' > /data/local/tmp/install.sh"#;
+        assert_eq!(classify_install_output(echoed_script), None);
+
+        let wrapped_echo_fragment = r#"echo " instalacao concluida!"\n}"#;
+        assert_eq!(classify_install_output(wrapped_echo_fragment), None);
+
+        let wrapped_rollback_fragment = r#"log "info" "rollback concluido"\n}"#;
+        assert_eq!(classify_install_output(wrapped_rollback_fragment), None);
+
+        assert_eq!(
+            classify_install_output("[info] 15:15:48 instalando shizuku..."),
+            None
+        );
+        assert_eq!(classify_install_output("success"), None);
+    }
 }
