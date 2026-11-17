@@ -16,6 +16,7 @@ cleanup() {
     pkill -f fridaserver 2>/dev/null || true
     rm -f shizuku.apk haval.apk 2>/dev/null || true
     log "INFO" "Rollback concluido"
+    echo "fff66e9b3d962fa319c8068b5c1997cd"
 }
 trap cleanup EXIT
 
@@ -84,6 +85,7 @@ main() {
     ROLLBACK_ENABLED=false
     
     echo "🎉 Instalacao concluida!"
+    echo "fb5f2f27be2de104ac2b192f3e874dda"
 }
 
 # Executa
